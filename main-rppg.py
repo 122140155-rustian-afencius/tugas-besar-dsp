@@ -9,6 +9,7 @@ from scipy import signal
 from collections import deque
 import threading
 import time
+import mediapipe as mp
 
 class RPPGProcessor:
     """
@@ -37,34 +38,56 @@ class RPPGProcessor:
         self.hr_buffer = deque(maxlen=20)
         self.timestamps = deque(maxlen=window_size)
         
-        # Parameter filter untuk POS
-        self.pos_matrix = np.array([[0, 1, -1], [-2, 1, 1]])
+        # Inisialisasi MediaPipe Face Detection
+        self.mp_face_detection = mp.solutions.face_detection
+        self.face_detection = self.mp_face_detection.FaceDetection(
+            model_selection=1,  # 0 for short-range, 1 for long-range detection
+            min_detection_confidence=0.5
+        )
         
-    def extract_roi(self, frame, face_coords):
+    def extract_roi(self, frame, detection):
         """
-        Ekstraksi Region of Interest (ROI) dari area wajah.
+        Ekstraksi Region of Interest (ROI) dari area wajah menggunakan MediaPipe.
         
         Args:
             frame (numpy.ndarray): Frame video
-            face_coords (tuple): Koordinat wajah (x, y, w, h)
+            detection (mediapipe.Detection): Deteksi wajah dari MediaPipe
             
         Returns:
-            numpy.ndarray: ROI yang diekstrak atau None jika tidak valid
+            tuple: (ROI image, ROI coordinates (x, y, w, h)) atau (None, None) jika tidak valid
         """
-        if face_coords is None:
-            return None
+        if detection is None:
+            return None, None
             
-        x, y, w, h = face_coords
+        # Get frame dimensions
+        h, w, _ = frame.shape
         
-        # Definisi area ROI khusus di dahi
-        # Perbarui koordinat untuk posisi dahi yang lebih tepat
-        forehead_roi = frame[y + int(0.1*h):y + int(0.15*h), 
-                          x + int(0.25*w):x + int(0.75*w)]
+        # Get bounding box from detection
+        bbox = detection.location_data.relative_bounding_box
+        x, y = int(bbox.xmin * w), int(bbox.ymin * h)
+        width, height = int(bbox.width * w), int(bbox.height * h)
         
-        if forehead_roi.size == 0:
-            return None
+        # Focus on forehead region (upper part of face)
+        forehead_y = y + int(0.05 * height)
+        forehead_height = int(0.15 * height)
+        forehead_x = x + int(0.25 * width)
+        forehead_width = int(0.5 * width)
+        
+        # Make sure ROI is within frame boundaries
+        forehead_x = max(0, forehead_x)
+        forehead_y = max(0, forehead_y)
+        forehead_width = min(w - forehead_x, forehead_width)
+        forehead_height = min(h - forehead_y, forehead_height)
+        
+        if forehead_width <= 0 or forehead_height <= 0:
+            return None, None
             
-        return forehead_roi
+        roi = frame[forehead_y:forehead_y+forehead_height, 
+                    forehead_x:forehead_x+forehead_width]
+                    
+        roi_coords = (forehead_x, forehead_y, forehead_width, forehead_height)
+        
+        return roi, roi_coords
     
     def calculate_mean_rgb(self, roi):
         """
@@ -89,6 +112,65 @@ class RPPGProcessor:
         
         return (mean_r, mean_g, mean_b)
     
+    def cpu_POS(self, signal, **kargs):
+        """
+        POS method on CPU using Numpy.
+
+        Args:
+            signal (numpy.ndarray): RGB signal of shape [e, c, f] where e is estimators, 
+                                    c is color channels (3 for RGB), f is frames
+            kargs (dict): Dictionary with parameters including 'fps'
+
+        Returns:
+            numpy.ndarray: Processed rPPG signal
+
+        Reference:
+            Wang, W., den Brinker, A. C., Stuijk, S., & de Haan, G. (2016). 
+            Algorithmic principles of remote PPG. 
+            IEEE Transactions on Biomedical Engineering, 64(7), 1479-1491.
+        """
+        # Run the pos algorithm on the RGB color signal c with sliding window length wlen
+        # Recommended value for wlen is 32 for a 20 fps camera (1.6 s)
+        eps = 10**-9
+        X = signal
+        e, c, f = X.shape            # e = #estimators, c = 3 rgb ch., f = #frames
+        w = int(1.6 * kargs['fps'])   # window length
+        
+        # Ensure window length is at least 2 and not larger than number of frames
+        w = max(2, min(w, f-1))
+
+        # stack e times fixed mat P
+        P = np.array([[0, 1, -1], [-2, 1, 1]])
+        Q = np.stack([P for _ in range(e)], axis=0)
+
+        # Initialize (1)
+        H = np.zeros((e, f))
+        for n in np.arange(w, f):
+            # Start index of sliding window (4)
+            m = n - w + 1
+            # Temporal normalization (5)
+            Cn = X[:, :, m:(n + 1)]
+            M = 1.0 / (np.mean(Cn, axis=2)+eps)
+            M = np.expand_dims(M, axis=2)  # shape [e, c, w]
+            Cn = np.multiply(M, Cn)
+
+            # Projection (6)
+            S = np.dot(Q, Cn)
+            S = S[0, :, :, :]
+            S = np.swapaxes(S, 0, 1)    # remove 3-th dim
+
+            # Tuning (7)
+            S1 = S[:, 0, :]
+            S2 = S[:, 1, :]
+            alpha = np.std(S1, axis=1) / (eps + np.std(S2, axis=1))
+            alpha = np.expand_dims(alpha, axis=1)
+            Hn = np.add(S1, alpha * S2)
+            Hnm = Hn - np.expand_dims(np.mean(Hn, axis=1), axis=1)
+            # Overlap-adding (8)
+            H[:, m:(n + 1)] = np.add(H[:, m:(n + 1)], Hnm)
+
+        return H
+    
     def apply_pos_algorithm(self, rgb_signals):
         """
         Implementasi algoritma POS untuk ekstraksi sinyal rPPG.
@@ -102,16 +184,14 @@ class RPPGProcessor:
         if rgb_signals.shape[1] < 10:  # Minimum data requirement
             return np.array([])
             
-        # Normalisasi sinyal RGB
-        mean_rgb = np.mean(rgb_signals, axis=1, keepdims=True)
-        norm_rgb = rgb_signals / (mean_rgb + 1e-8)
+        # Reshape for cpu_POS: [e, c, f] where e=1, c=3, f=n_samples
+        reshaped_signals = rgb_signals.reshape(1, 3, -1)
         
-        # Aplikasi transformasi POS
-        pos_signals = np.dot(self.pos_matrix, norm_rgb)
+        # Apply POS algorithm
+        rppg_signal = self.cpu_POS(reshaped_signals, fps=self.fps)
         
-        # Kombinasi dua komponen POS untuk mendapatkan sinyal rPPG
-        alpha = np.std(pos_signals[0, :]) / (np.std(pos_signals[1, :]) + 1e-8)
-        rppg_signal = pos_signals[0, :] - alpha * pos_signals[1, :]
+        # Flatten the output
+        rppg_signal = rppg_signal.reshape(-1)
         
         return rppg_signal
     
@@ -245,7 +325,13 @@ class RPPGApp:
         
         # Inisialisasi komponen
         self.processor = RPPGProcessor()
-        self.face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+        # MediaPipe face detection instead of Haar Cascade
+        self.mp_face_detection = mp.solutions.face_detection
+        self.mp_drawing = mp.solutions.drawing_utils
+        self.face_detection = self.mp_face_detection.FaceDetection(
+            model_selection=1,
+            min_detection_confidence=0.5
+        )
         self.cap = None
         self.is_running = False
         
@@ -317,9 +403,21 @@ class RPPGApp:
     def start_camera(self):
         """Memulai capture video dan processing."""
         try:
-            self.cap = cv2.VideoCapture(1)
-            if not self.cap.isOpened():
-                raise Exception("Cannot open camera")
+            # Try multiple camera indices if needed
+            cam_indices = [1, 0, 2]  # Try external camera (1) first, then built-in (0), then other options
+            self.cap = None
+            
+            for idx in cam_indices:
+                try:
+                    self.cap = cv2.VideoCapture(idx)
+                    if self.cap.isOpened():
+                        self.status_var.set(f"Successfully opened camera {idx}")
+                        break
+                except Exception as e:
+                    self.status_var.set(f"Failed to open camera {idx}: {str(e)}")
+                    
+            if self.cap is None or not self.cap.isOpened():
+                raise Exception("Cannot open any camera. Please check connections.")
                 
             # Set resolusi dan FPS
             self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
@@ -336,9 +434,19 @@ class RPPGApp:
             self.processing_thread.daemon = True
             self.processing_thread.start()
             
-            # Mulai animasi plot dengan interval lebih cepat
-            self.ani = FuncAnimation(self.fig, self.update_plot, interval=50, 
-                                    cache_frame_data=False, blit=False)
+            # Mulai animasi plot dengan parameter yang mencegah warning
+            # Explicitly set save_count to prevent unbounded cache warning
+            max_frames = 1000  # Maximum frames to cache
+            self.ani = FuncAnimation(
+                self.fig, 
+                self.update_plot, 
+                interval=50,
+                cache_frame_data=False,  # Disable caching to prevent memory issues
+                save_count=max_frames,   # Set explicit save_count
+                blit=False
+            )
+            # Keep a reference to animation to prevent it from being garbage collected
+            self.root.animation = self.ani
             self.canvas.draw()  # Initial draw
             
         except Exception as e:
@@ -363,21 +471,27 @@ class RPPGApp:
             
     def detect_face(self, frame):
         """
-        Deteksi wajah menggunakan Haar Cascade.
+        Deteksi wajah menggunakan MediaPipe Face Detection.
         
         Args:
             frame (numpy.ndarray): Frame video
             
         Returns:
-            tuple: Koordinat wajah terbesar atau None
+            mediapipe.Detection: Deteksi wajah dengan skor tertinggi atau None
         """
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        faces = self.face_cascade.detectMultiScale(gray, 1.3, 5)
+        # Convert BGR to RGB for MediaPipe
+        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         
-        if len(faces) > 0:
-            # Ambil wajah terbesar
-            largest_face = max(faces, key=lambda face: face[2] * face[3])
-            return tuple(largest_face)
+        # Process the image with MediaPipe
+        results = self.face_detection.process(frame_rgb)
+        
+        # Return the first detection if any, otherwise None
+        if results.detections:
+            # Get detection with highest confidence
+            best_detection = max(results.detections, 
+                                key=lambda detection: detection.score)
+            return best_detection
+        
         return None
         
     def process_video(self):
@@ -385,50 +499,65 @@ class RPPGApp:
         start_time = time.time()
         
         while self.is_running:
-            ret, frame = self.cap.read()
-            if not ret:
-                continue
-                
-            current_time = time.time() - start_time
-            
-            # Deteksi wajah
-            face_coords = self.detect_face(frame)
-            
-            if face_coords is not None:
-                # Gambar kotak di sekitar wajah
-                x, y, w, h = face_coords
-                cv2.rectangle(frame, (x, y), (x+w, y+h), (0, 255, 0), 2)
-                
-                # Ekstrak ROI dan hitung rata-rata RGB
-                roi = self.processor.extract_roi(frame, face_coords)
-                rgb_values = self.processor.calculate_mean_rgb(roi)
-                
-                # Process untuk mendapatkan rPPG signal dan heart rate
-                rppg_signal, heart_rate, filtered_signal = self.processor.process_frame(rgb_values, current_time)
-                
-                if rppg_signal is not None and len(rppg_signal) > 0:
-                    # Update data untuk plotting - gunakan root.after untuk thread safety
-                    self.root.after(0, self.update_plot_data, rppg_signal[-1], filtered_signal[-1] if filtered_signal is not None else 0, current_time)
+            try:
+                ret, frame = self.cap.read()
+                if not ret:
+                    # If frame is not retrieved, try to reconnect
+                    self.status_var.set("Error retrieving frame, attempting to reconnect...")
+                    time.sleep(0.5)  # Wait before trying again
+                    continue
                     
-                    # Update heart rate display - gunakan root.after untuk thread safety
-                    self.root.after(0, lambda hr=heart_rate: self.hr_label.config(text=f"Heart Rate: {hr:.1f} BPM"))
+                current_time = time.time() - start_time
                 
-                # Gambar ROI pada frame - perbarui posisi untuk menunjukkan dahi
-                if roi is not None:
-                    roi_x = x + int(0.25*w)
-                    roi_y = y + int(0.1*h)
-                    roi_w = int(0.5*w)
-                    roi_h = int(0.2*h)
-                    cv2.rectangle(frame, (roi_x, roi_y), (roi_x+roi_w, roi_y+roi_h), (255, 0, 0), 2)
-                    cv2.putText(frame, "ROI", (roi_x, roi_y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 0), 2)
-            
-            # Tampilkan frame
-            cv2.imshow('rPPG Heart Rate Monitor', frame)
-            
-            # Break jika ESC ditekan
-            if cv2.waitKey(1) & 0xFF == 27:
-                self.stop_camera()
-                break
+                # Deteksi wajah dengan MediaPipe
+                face_detection = self.detect_face(frame)
+                
+                if face_detection is not None:
+                    # Draw detection on frame
+                    h, w, _ = frame.shape
+                    bbox = face_detection.location_data.relative_bounding_box
+                    x, y = int(bbox.xmin * w), int(bbox.ymin * h)
+                    width, height = int(bbox.width * w), int(bbox.height * h)
+                    cv2.rectangle(frame, (x, y), (x + width, y + height), (0, 255, 0), 2)
+                    
+                    # Extract ROI and calculate RGB mean values
+                    roi, roi_coords = self.processor.extract_roi(frame, face_detection)
+                    rgb_values = self.processor.calculate_mean_rgb(roi)
+                    
+                    # Process frame to get rPPG signal and heart rate
+                    rppg_signal, heart_rate, filtered_signal = self.processor.process_frame(rgb_values, current_time)
+                    
+                    if rppg_signal is not None and len(rppg_signal) > 0:
+                        # Update plotting data thread-safely
+                        self.root.after(0, self.update_plot_data, 
+                                        rppg_signal[-1], 
+                                        filtered_signal[-1] if filtered_signal is not None else 0, 
+                                        current_time)
+                        
+                        # Update heart rate display thread-safely
+                        self.root.after(0, lambda hr=heart_rate: 
+                                        self.hr_label.config(text=f"Heart Rate: {hr:.1f} BPM"))
+                    
+                    # Draw ROI on frame
+                    if roi is not None and roi_coords is not None:
+                        fx, fy, fw, fh = roi_coords
+                        cv2.rectangle(frame, (fx, fy), (fx+fw, fy+fh), (255, 0, 0), 2)
+                        cv2.putText(frame, "ROI", (fx, fy-10), 
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 0), 2)
+                
+                # Display frame
+                cv2.imshow('rPPG Heart Rate Monitor', frame)
+                
+                # Break if ESC key is pressed
+                if cv2.waitKey(1) & 0xFF == 27:
+                    self.stop_camera()
+                    break
+                    
+            except Exception as e:
+                self.status_var.set(f"Processing error: {str(e)}")
+                time.sleep(0.5)  # Add delay to avoid flooding with errors
+                if not self.is_running:
+                    break
                 
     def update_plot_data(self, raw_value, filtered_value, timestamp):
         """
