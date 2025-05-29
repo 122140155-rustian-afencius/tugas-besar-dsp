@@ -86,7 +86,7 @@ options = PoseLandmarkerOptions(
 landmarker = PoseLandmarker.create_from_options(options)
 
 # ===== Webcam Setup & Buffers =====
-cap = cv2.VideoCapture(0)
+cap = cv2.VideoCapture(1)
 fps = cap.get(cv2.CAP_PROP_FPS) or 30
 frame_idx = 0
 
