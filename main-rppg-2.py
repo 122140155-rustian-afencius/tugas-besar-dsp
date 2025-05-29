@@ -50,21 +50,24 @@ class RPPGProcessor:
         self.filtered_rppg = deque(maxlen=self.max_buffer_size)
         self.timestamps = deque(maxlen=self.max_buffer_size)
         
-        # Enhanced filter parameters - more specific to heart rate range
-        self.lowcut = 0.8  # 48 BPM
-        self.highcut = 2.0  # 120 BPM
-        self.filter_order = 4  # Higher order for steeper cutoff
+        # Enhanced filter parameters - better optimized for heart rate range
+        self.lowcut = 0.7  # 42 BPM - wider range for better detection
+        self.highcut = 2.5  # 150 BPM
+        self.filter_order = 3  # Lower order for less ringing
         
         # Filter state variables for stability
         self.prev_filtered_value = 0
+        self.last_filter_time = 0  # Track when we last successfully filtered
+        
+        # Heart rate calculation parameters
+        self.current_hr = 0
+        # Store HR as simple values, not tuples for cleaner handling
+        self.hr_history = deque(maxlen=15)
+        self.hr_timestamps = deque(maxlen=15)  # Separate timestamps for clarity
+        self.last_valid_hr_time = 0  # Track when we last had a valid HR
         
         # Added smoothing parameters
         self.smooth_window_size = 9  # Smoothing window size
-        
-        # Heart rate calculation parameters - more robust
-        self.current_hr = 0
-        self.hr_history = deque(maxlen=15)  # Store more HR measurements for better averaging
-        self.prev_peaks_timestamps = deque(maxlen=10)  # For calculating instantaneous HR
         
         # Wavelet transform parameters
         self.wavelet_name = 'sym4'  # Symlet wavelet - good for biomedical signals
@@ -74,6 +77,13 @@ class RPPGProcessor:
         self.min_peak_distance = int(self.fps * 0.5)  # Minimum 0.5s between peaks (120 BPM max)
         self.peak_prominence = 0.3  # Starting prominence
         
+        # Minimum signal quality needed for reliable HR estimation
+        self.min_signal_quality = 1.2
+        
+        # Force a recalculation if too much time has passed
+        self.force_recalc_interval = 1.0  # seconds
+        self.last_calculation_time = 0
+    
     def cpu_POS(self, signal_array):
         """
         POS method implementation for rPPG signal extraction.
@@ -253,43 +263,67 @@ class RPPGProcessor:
         if len(self.rppg_signal) < self.window_size:
             return
         
-        # Get recent samples for filtering - use a longer segment for better frequency response
-        analysis_window = min(int(self.fps * 4), len(self.rppg_signal))  # Use 4 seconds or all available data
+        # Check if we need to filter (at least every 33ms - ~30fps)
+        current_time = time.time()
+        if current_time - self.last_filter_time < 0.033 and len(self.filtered_rppg) > 0:
+            return
+        
+        self.last_filter_time = current_time
+        
+        # Get recent samples for filtering
+        analysis_window = min(int(self.fps * 4), len(self.rppg_signal))  # Use 4 seconds
+        if analysis_window < 10:  # Need minimum data for meaningful filtering
+            return
+            
         recent_samples = list(self.rppg_signal)[-analysis_window:]
         
         try:
-            # Stage 1: Butterworth bandpass filter - focused on heart rate frequency band
+            # Stage 1: Butterworth bandpass filter with guard for short signals
             nyquist = self.fps / 2
             low = self.lowcut / nyquist
             high = self.highcut / nyquist
             
-            # Apply zero-phase Butterworth filter (more stable than standard)
+            # Apply zero-phase Butterworth filter with padding for stability
+            padded_samples = np.pad(recent_samples, (5, 5), mode='edge')
             b, a = signal.butter(self.filter_order, [low, high], btype='bandpass')
-            filtered_segment = signal.filtfilt(b, a, recent_samples)
+            filtered_full = signal.filtfilt(b, a, padded_samples)
+            filtered_segment = filtered_full[5:-5]  # Remove padding
             
-            # Stage 2: Wavelet denoising (effective at removing high-frequency noise)
-            filtered_segment = self._wavelet_denoise(filtered_segment)
+            # Stage 2: Wavelet denoising if we have enough data
+            if len(filtered_segment) > 2**self.wavelet_level + 2:
+                filtered_segment = self._wavelet_denoise(filtered_segment)
             
-            # Stage 3: Savitzky-Golay filter (preserves peaks better than moving average)
+            # Stage 3: Savitzky-Golay filter with careful window sizing
             window_length = min(15, len(filtered_segment) - 2)
-            if window_length % 2 == 0:  # Must be odd
-                window_length -= 1
-            if window_length >= 3:  # Must be at least 3
+            if window_length > 3:
+                if window_length % 2 == 0:  # Must be odd
+                    window_length -= 1
                 filtered_segment = signal.savgol_filter(filtered_segment, window_length, 2)
             
-            # Stage 4: Apply exponential smoothing for stable transitions
-            alpha = 0.3  # Smoothing factor (0-1), higher = less smoothing
-            last_value = self.prev_filtered_value if len(self.filtered_rppg) > 0 else filtered_segment[-1]
-            smoothed_value = alpha * filtered_segment[-1] + (1 - alpha) * last_value
+            # Stage 4: Dynamic smoothing based on signal variance
+            signal_var = np.var(filtered_segment)
+            # More aggressive smoothing for noisier signals
+            alpha = min(0.5, max(0.1, 0.3 / (1 + signal_var)))
             
-            # Update state
+            # Only take the latest value for real-time filtering
+            latest_value = filtered_segment[-1]
+            
+            # Apply exponential smoothing
+            if len(self.filtered_rppg) > 0:
+                smoothed_value = (alpha * latest_value + 
+                                 (1 - alpha) * self.prev_filtered_value)
+            else:
+                smoothed_value = latest_value
+            
+            # Update state for next iteration
             self.prev_filtered_value = smoothed_value
             
-            # Add the filtered/smoothed value to the buffer
+            # Add the filtered value to buffer
             self.filtered_rppg.append(smoothed_value)
             
         except Exception as e:
-            print(f"Advanced filter error: {e}")
+            print(f"Filtering error: {e}")
+            # On error, copy the raw signal as fallback
             if len(self.rppg_signal) > 0:
                 self.filtered_rppg.append(self.rppg_signal[-1])
     
@@ -322,108 +356,230 @@ class RPPGProcessor:
         return pywt.waverec(coeffs, self.wavelet_name)
     
     def _calculate_heart_rate(self):
-        """Calculate heart rate from filtered rPPG signal using robust peak detection."""
+        """
+        Calculate heart rate from filtered rPPG signal with improved reliability.
+        Uses multiple methods and robust peak detection to prevent sticking.
+        """
+        # Need enough data to calculate heart rate
         if len(self.filtered_rppg) < self.window_size:
             return
+            
+        current_time = time.time()
         
-        # Get recent filtered samples - use a longer segment for better peak detection
-        analysis_window = min(int(self.fps * 8), len(self.filtered_rppg))  # 8 seconds of data
-        recent_filtered = list(self.filtered_rppg)[-analysis_window:]
-        recent_timestamps = list(self.timestamps)[-analysis_window:]
+        # Don't recalculate too frequently unless forced
+        time_since_last = current_time - self.last_calculation_time
+        if time_since_last < 0.2 and time_since_last < self.force_recalc_interval:
+            return
+            
+        # Force recalculation if it's been too long since last valid HR
+        force_recalc = (current_time - self.last_valid_hr_time > 2.0)
         
-        # Normalize signal
-        signal_array = np.array(recent_filtered)
-        signal_array = (signal_array - np.mean(signal_array)) / (np.std(signal_array) + 1e-9)
+        # Set the calculation timestamp
+        self.last_calculation_time = current_time
         
-        # Dynamic adjustment of peak detection parameters based on signal quality
-        signal_quality = np.abs(np.max(signal_array) - np.min(signal_array))
+        # Get data for analysis - use multiple window sizes for better accuracy
+        short_window = min(int(self.fps * 3), len(self.filtered_rppg))  # 3 seconds
+        medium_window = min(int(self.fps * 5), len(self.filtered_rppg))  # 5 seconds
+        long_window = min(int(self.fps * 8), len(self.filtered_rppg))  # 8 seconds
         
-        # Lower prominence for better peak detection
-        prominence = 0.2  # Default prominence (reduced from 0.25)
+        # Only proceed if we have enough data
+        if short_window < self.fps * 1.5:  # Need at least 1.5 seconds
+            return
         
-        # Debug info
-        print(f"Signal quality: {signal_quality:.2f}, Analysis window: {len(recent_filtered)} samples")
+        # Get recent data segments of different sizes
+        short_segment = list(self.filtered_rppg)[-short_window:]
+        medium_segment = list(self.filtered_rppg)[-medium_window:] if medium_window > short_window else short_segment
+        long_segment = list(self.filtered_rppg)[-long_window:] if long_window > medium_window else medium_segment
+        
+        # Get corresponding timestamps
+        recent_timestamps = list(self.timestamps)[-long_window:]
         
         try:
-            # Find peaks with adaptive parameters
-            peaks, peak_props = signal.find_peaks(
-                signal_array, 
-                prominence=prominence,
+            # Process signal using multiple methods for robustness
+            
+            # Method 1: Standard peak detection on normalized signal
+            # -----------------------------------------------------
+            norm_signal = self._normalize_signal(medium_segment)
+            
+            # Evaluate signal quality
+            signal_quality = np.abs(np.max(norm_signal) - np.min(norm_signal))
+            print(f"Signal quality: {signal_quality:.2f}")
+            
+            # Adjust prominence based on signal quality
+            prominence = 0.2  # Default
+            if signal_quality > 2.5:
+                prominence = 0.35  # Strong signal, be selective
+            elif signal_quality < 1.5:
+                prominence = 0.15  # Weak signal, be more permissive
+            
+            # Find peaks
+            peaks, _ = signal.find_peaks(
+                norm_signal,
+                prominence=prominence, 
                 distance=self.min_peak_distance,
-                width=int(self.fps * 0.1)  # Minimum peak width
+                width=int(self.fps * 0.08)  # Minimum width
             )
             
-            # Debug info
-            print(f"Peaks detected: {len(peaks)}")
+            peak_count = len(peaks)
+            print(f"Peaks detected: {peak_count}")
             
-            # Calculate heart rate even with fewer peaks for faster feedback
-            if len(peaks) >= 1:
-                # Calculate heart rate directly from peaks frequency
-                # Number of peaks / time window in minutes
-                window_duration_minutes = len(recent_filtered) / (self.fps * 60)
-                direct_hr = len(peaks) / window_duration_minutes
+            # Method 2: Frequency domain analysis for confirmation
+            # --------------------------------------------------
+            freq_hr = self._frequency_analysis(long_segment)
+            
+            # Method 3: Autocorrelation method as additional check
+            # --------------------------------------------------
+            auto_hr = self._autocorrelation_hr(medium_segment)
+            
+            print(f"Multiple HR estimates - Peaks: {peak_count}, Freq: {freq_hr:.1f}, Auto: {auto_hr:.1f}")
+            
+            # Determine heart rate from combination of methods
+            if peak_count >= 2:
+                # Get inter-peak intervals for time-domain HR
+                peak_intervals = []
+                peak_hrs = []
                 
-                # Only use direct calculation when we have few peaks
-                if len(peaks) < 3 and 40 <= direct_hr <= 180:
-                    print(f"Using direct HR calculation: {direct_hr:.1f} BPM")
-                    self.hr_history.append(direct_hr)
-                    self.current_hr = np.mean(list(self.hr_history))
-                    return
-                    
-                # Only continue with time-based calculation if we have enough peaks
-                if len(peaks) >= 2:
-                    # Get peak timestamps
-                    peak_times = [recent_timestamps[i] for i in peaks if i < len(recent_timestamps)]
-                    
-                    if len(peak_times) >= 2:
-                        # Calculate instantaneous heart rates from adjacent peaks
-                        inst_hrs = []
-                        for i in range(1, len(peak_times)):
-                            time_diff = peak_times[i] - peak_times[i-1]
-                            if 0.3 <= time_diff <= 1.5:  # Valid range: 40-200 BPM
-                                inst_hr = 60.0 / time_diff
-                                inst_hrs.append(inst_hr)
-                        
-                        # Debug info
-                        print(f"Instantaneous HRs: {[round(hr, 1) for hr in inst_hrs]}")
-                        
-                        # If we have instantaneous measurements
-                        if inst_hrs:
-                            # Remove outliers (outside 1.5 IQR)
-                            if len(inst_hrs) > 3:
-                                q1, q3 = np.percentile(inst_hrs, [25, 75])
-                                iqr = q3 - q1
-                                lower_bound = q1 - 1.5 * iqr
-                                upper_bound = q3 + 1.5 * iqr
-                                inst_hrs = [hr for hr in inst_hrs if lower_bound <= hr <= upper_bound]
-                            
-                            # Calculate median HR (more robust than mean)
-                            if inst_hrs:
-                                median_hr = np.median(inst_hrs)
-                                
-                                # Only accept if within physiological range
-                                if 40 <= median_hr <= 180:
-                                    print(f"Adding HR to history: {median_hr:.1f} BPM")
-                                    self.hr_history.append(median_hr)
-                                    
-                                    # If we have enough history, use it; otherwise use the median
-                                    if len(self.hr_history) > 2:
-                                        # Calculate weighted moving average for stable output
-                                        weights = np.linspace(0.5, 1.0, len(self.hr_history))
-                                        weighted_hrs = weights * np.array(list(self.hr_history))
-                                        self.current_hr = np.sum(weighted_hrs) / np.sum(weights)
-                                    else:
-                                        self.current_hr = median_hr
-                                    
-                                    print(f"Current HR: {self.current_hr:.1f} BPM")
-                                    
-            # If we still don't have a valid heart rate but have a history, use the history
-            if self.current_hr == 0 and len(self.hr_history) > 0:
-                self.current_hr = np.mean(list(self.hr_history))
+                # Calculate time-based HR from peaks
+                for i in range(1, len(peaks)):
+                    samples_between = peaks[i] - peaks[i-1]
+                    if samples_between > 0:
+                        hr_from_peaks = 60.0 * self.fps / samples_between
+                        if 40 <= hr_from_peaks <= 180:  # Valid physiological range
+                            peak_hrs.append(hr_from_peaks)
                 
+                if peak_hrs:
+                    # Use median for robustness
+                    peak_based_hr = np.median(peak_hrs)
+                    
+                    # Check whether time-domain and frequency-domain methods agree
+                    if freq_hr > 0 and abs(freq_hr - peak_based_hr) < 15:
+                        # Methods agree, use time-domain (more precise)
+                        final_hr = peak_based_hr
+                    elif freq_hr > 0:
+                        # Methods disagree, use weighted average
+                        final_hr = (peak_based_hr * 2 + freq_hr) / 3
+                    else:
+                        # Freq analysis failed, use time-domain
+                        final_hr = peak_based_hr
+                        
+                    print(f"Calculated HR: {final_hr:.1f} BPM")
+                    
+                    # Add to history with timestamp
+                    self.hr_history.append(final_hr)
+                    self.hr_timestamps.append(current_time)
+                    self.last_valid_hr_time = current_time
+                    
+                    # Calculate stable output with weighted average
+                    if len(self.hr_history) >= 3:
+                        # Create weights favoring recent measurements
+                        weights = np.linspace(0.5, 1.0, len(self.hr_history))
+                        self.current_hr = np.average(self.hr_history, weights=weights)
+                        print(f"Stable HR: {self.current_hr:.1f} BPM (from {len(self.hr_history)} measurements)")
+                    else:
+                        self.current_hr = final_hr
+            
+            # Fallback methods if peak detection fails
+            elif freq_hr > 0 and (peak_count == 0 or force_recalc):
+                print(f"Using frequency-based HR: {freq_hr:.1f} BPM")
+                if auto_hr > 0 and abs(freq_hr - auto_hr) < 15:
+                    # If autocorrelation agrees with frequency analysis
+                    final_hr = (freq_hr + auto_hr) / 2
+                else:
+                    final_hr = freq_hr
+                
+                if 40 <= final_hr <= 180:
+                    self.hr_history.append(final_hr)
+                    self.hr_timestamps.append(current_time)
+                    self.last_valid_hr_time = current_time
+                    
+                    # Simple average for frequency-based estimates
+                    self.current_hr = np.mean(list(self.hr_history)[-5:])
+        
         except Exception as e:
-            print(f"Heart rate calculation error: {e}")
-            # Don't reset current_hr to 0 if there's an error - keep the last valid value
+            print(f"Heart rate calculation error: {str(e)}")
+            # Don't reset current_hr on error
+            
+    def _normalize_signal(self, signal_data):
+        """Normalize signal to zero mean and unit variance."""
+        signal_array = np.array(signal_data)
+        return (signal_array - np.mean(signal_array)) / (np.std(signal_array) + 1e-9)
+    
+    def _frequency_analysis(self, signal_data):
+        """Estimate heart rate using frequency domain analysis."""
+        if len(signal_data) < self.fps * 2:  # Need at least 2 seconds
+            return 0
+            
+        # Prepare signal - remove mean and apply window
+        signal_array = np.array(signal_data)
+        signal_array = signal_array - np.mean(signal_array)
+        window = signal.windows.hann(len(signal_array))
+        signal_array = signal_array * window
+        
+        # Compute FFT and frequency axis
+        n_samples = len(signal_array)
+        fft_data = np.abs(np.fft.rfft(signal_array))
+        freqs = np.fft.rfftfreq(n_samples, 1/self.fps)
+        
+        # Limit to physiological heart rate range (40-180 BPM)
+        valid_range = np.logical_and(freqs >= 40/60, freqs <= 180/60)
+        if not np.any(valid_range):
+            return 0
+            
+        valid_freqs = freqs[valid_range]
+        valid_fft = fft_data[valid_range]
+        
+        # Find the dominant frequency
+        if len(valid_fft) > 0:
+            max_idx = np.argmax(valid_fft)
+            dominant_freq = valid_freqs[max_idx]
+            hr = dominant_freq * 60  # Convert Hz to BPM
+            return hr
+        
+        return 0
+    
+    def _autocorrelation_hr(self, signal_data):
+        """Estimate heart rate using autocorrelation."""
+        if len(signal_data) < self.fps * 2:
+            return 0
+            
+        # Prepare signal
+        signal_array = np.array(signal_data)
+        signal_array = signal_array - np.mean(signal_array)
+        
+        # Calculate autocorrelation
+        autocorr = np.correlate(signal_array, signal_array, mode='full')
+        autocorr = autocorr[len(autocorr)//2:]  # Keep only second half
+        
+        # Find peaks in autocorrelation
+        min_lag = int(self.fps * 60/180)  # 180 BPM -> 0.33s
+        max_lag = int(self.fps * 60/40)   # 40 BPM -> 1.5s
+        
+        if max_lag >= len(autocorr):
+            max_lag = len(autocorr) - 1
+            
+        if max_lag <= min_lag:
+            return 0
+            
+        # Focus on the physiologically relevant range
+        autocorr_segment = autocorr[min_lag:max_lag]
+        
+        if len(autocorr_segment) < 3:
+            return 0
+            
+        # Find first major peak (excluding the zero lag)
+        peaks, _ = signal.find_peaks(autocorr_segment, height=0)
+        
+        if not len(peaks):
+            return 0
+            
+        # Convert peak position to heart rate
+        first_peak = peaks[0] + min_lag
+        hr = 60 * self.fps / first_peak
+        
+        if 40 <= hr <= 180:
+            return hr
+            
+        return 0
 
 class RPPGApp:
     """
@@ -615,25 +771,37 @@ class RPPGApp:
             # Process frame
             processed_frame, face_detected, hr = self.processor.process_frame(frame)
             
-            # Update heart rate display
+            # Update heart rate display with staleness detection
+            current_time = time.time()
+            hr_staleness = current_time - self.processor.last_valid_hr_time
+            
             if face_detected:
                 if hr > 0:
-                    self.hr_label.config(text=f"Heart Rate: {hr:.1f} BPM")
+                    # Show HR with freshness indicator
+                    if hr_staleness < 3.0:  # Fresh measurement
+                        hr_text = f"Heart Rate: {hr:.1f} BPM"
+                        self.hr_label.config(text=hr_text, foreground="black")
+                    else:  # Stale measurement
+                        hr_text = f"Heart Rate: {hr:.1f} BPM (updating...)"
+                        self.hr_label.config(text=hr_text, foreground="#555555")
+                    
                     status_text = "Status: Face Detected - Monitoring"
                 else:
-                    # Still show we're detecting, just waiting for heart rate
                     status_text = "Status: Face Detected - Calculating HR..."
-                    # Keep the existing HR text if it already shows a value
                     if "BPM" not in self.hr_label.cget("text"):
-                        self.hr_label.config(text="Heart Rate: Calculating...")
+                        self.hr_label.config(text="Heart Rate: Calculating...", foreground="black")
             else:
                 status_text = "Status: No Face Detected"
-                # Keep the existing HR text if it shows a value
-                if "BPM" not in self.hr_label.cget("text"):
-                    self.hr_label.config(text="Heart Rate: -- BPM")
+                if "BPM" not in self.hr_label.cget("text") and "Calculating" not in self.hr_label.cget("text"):
+                    self.hr_label.config(text="Heart Rate: -- BPM", foreground="black")
             
             self.status_label.config(text=status_text)
             
+            # Check for stalled calculations
+            if hr_staleness > 10.0 and "BPM" in self.hr_label.cget("text"):
+                # Force recalculation by slightly changing processor state
+                self.processor.force_recalc_interval = 0.1  # More frequent recalculation
+                
             # Update plot data
             self._update_plot_data(timestamp)
             
