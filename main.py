@@ -525,6 +525,10 @@ class UnifiedVitalSignsApp:
         self.stop_button = ttk.Button(control_frame, text="Stop Monitoring", command=self.stop_monitoring, state=tk.DISABLED)
         self.stop_button.pack(side=tk.LEFT, padx=(0, 10))
         
+        # Add reset signal button
+        self.reset_button = ttk.Button(control_frame, text="Reset Signals", command=self.reset_signals)
+        self.reset_button.pack(side=tk.LEFT, padx=(0, 10))
+        
         # Status and readings
         self.status_label = ttk.Label(control_frame, text="Status: Ready")
         self.status_label.pack(side=tk.LEFT, padx=(20, 10))
@@ -543,11 +547,16 @@ class UnifiedVitalSignsApp:
         content_frame = ttk.Frame(main_frame)
         content_frame.pack(fill=tk.BOTH, expand=True)
         
-        # Video frame (left side)
-        self.video_frame = ttk.LabelFrame(content_frame, text="Video Feed", padding="5")
-        self.video_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 5))
+        # Create a frame to contain and control video size
+        video_container = ttk.Frame(content_frame, width=720)  # Control width here
+        video_container.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 5))
+        video_container.pack_propagate(False)  # Prevent the frame from shrinking to fit its contents
         
-        # Add a label to display the video feed
+        # Video frame (left side)
+        self.video_frame = ttk.LabelFrame(video_container, text="Video Feed", padding="5")
+        self.video_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # Add a label to display the video feed with fixed dimensions
         self.video_label = tk.Label(self.video_frame)
         self.video_label.pack(fill=tk.BOTH, expand=True)
         
@@ -704,6 +713,49 @@ class UnifiedVitalSignsApp:
         
         # Clear video display
         cv2.destroyAllWindows()
+    
+    def reset_signals(self):
+        """Reset all signal data and plots."""
+        # Clear rPPG processor buffers
+        self.rppg_processor.r_signal.clear()
+        self.rppg_processor.g_signal.clear()
+        self.rppg_processor.b_signal.clear()
+        self.rppg_processor.rppg_signal.clear()
+        self.rppg_processor.filtered_rppg.clear()
+        self.rppg_processor.timestamps.clear()
+        self.rppg_processor.hr_history.clear()
+        self.rppg_processor.hr_timestamps.clear()
+        self.rppg_processor.current_hr = 0
+        
+        # Clear respiration processor buffers
+        self.resp_processor.raw_y_buffer.clear()
+        self.resp_processor.filtered_y_buffer.clear()
+        self.resp_processor.time_buffer.clear()
+        self.resp_processor.current_rr = 0
+        
+        # Clear plot data
+        self.rppg_time_data.clear()
+        self.r_data.clear()
+        self.g_data.clear()
+        self.b_data.clear()
+        self.rppg_data.clear()
+        self.filtered_rppg_data.clear()
+        self.resp_time_data.clear()
+        self.raw_resp_data.clear()
+        self.filtered_resp_data.clear()
+        
+        # Update displays
+        self.hr_label.config(text="Heart Rate: -- BPM")
+        self.rr_label.config(text="Respiration: -- BPM")
+        self.status_label.config(text="Status: Signals Reset")
+        
+        # Force plot update
+        self._update_rppg_plots(None)
+        self._update_resp_plots(None)
+        self.rppg_canvas.draw_idle()
+        self.resp_canvas.draw_idle()
+        
+        print("All signals have been reset")
     
     def _capture_frames(self):
         """Capture frames from camera in separate thread."""
