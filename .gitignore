@@ -8,6 +8,8 @@ wheels/
 
 # Virtual environments
 .venv
+.lock
+.toml
 
 #Log History
 .log

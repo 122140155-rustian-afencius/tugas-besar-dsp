@@ -13,7 +13,7 @@ import time
 from collections import deque
 from typing import Optional, Tuple, List
 
-from processors.signal_utils import (
+from utils.signal_utils import (
     apply_bandpass_filter, 
     apply_savgol_filter,
     wavelet_denoise,

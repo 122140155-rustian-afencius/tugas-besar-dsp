@@ -13,7 +13,7 @@ import logging
 from collections import deque
 from typing import Optional, Tuple
 
-from processors.signal_utils import (
+from utils.signal_utils import (
     apply_bandpass_filter,
     find_dominant_frequency
 )
