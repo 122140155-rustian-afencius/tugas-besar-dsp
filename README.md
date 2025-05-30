@@ -28,15 +28,14 @@ Final project pada mata kuliah Pengolahan Sinyal Digital (IF3024) bertujuan untu
 ## **Logbook Mingguan**
 ---
 ### **Minggu 1 (12 Mei 2025 - 18 Mei 2025)**
-- 'Inisialisasi Project, membuat repositori untuk manajemen final'
-- 'Melakukan pembagian tugas antara Rustian Afencius Marbun(122140153) dan Shintya Ayu Wardani(122140138)'
+- Inisialisasi Project, membuat repositori untuk manajemen final
+- Melakukan pembagian tugas antara Rustian Afencius Marbun(122140153) dan Shintya Ayu Wardani(122140138)
 ---
-coming soon
 ### **Minggu 2 (19 Mei 2025 - 25 Mei 2025)**
-- 'Membuat file kode rPPG dan Respiration Signal'
+- Membuat file kode rPPG dan Respiration Signal
 ---
 ### **Minggu 3 (26 Mei 2025 - 31 Mei 2025)**
-- 'Membuat laporan menggunakan overleaf'
-- 'Melakukan Fiksasi Kode rPPG dan Respiration Signal'
-- 'Membuat Kode Main.py'
-- 'Merapikan folder DSP'
+- Membuat laporan menggunakan overleaf
+- Melakukan Fiksasi Kode rPPG dan Respiration Signal
+- Membuat Kode Main.py
+- Merapikan folder DSP
