@@ -14,6 +14,7 @@ import scipy.signal as signal
 import pywt
 from datetime import datetime
 import logging
+from PIL import Image, ImageTk
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(message)s")
@@ -497,6 +498,9 @@ class UnifiedVitalSignsApp:
         self.frame_queue = queue.Queue(maxsize=10)
         self.capture_thread = None
         
+        # Video display
+        self.video_label = None
+        
         # Setup GUI
         self._setup_gui()
         self._setup_plots()
@@ -542,6 +546,10 @@ class UnifiedVitalSignsApp:
         # Video frame (left side)
         self.video_frame = ttk.LabelFrame(content_frame, text="Video Feed", padding="5")
         self.video_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 5))
+        
+        # Add a label to display the video feed
+        self.video_label = tk.Label(self.video_frame)
+        self.video_label.pack(fill=tk.BOTH, expand=True)
         
         # Notebook for plots (right side)
         self.notebook = ttk.Notebook(content_frame)
@@ -851,9 +859,43 @@ class UnifiedVitalSignsApp:
         return [self.raw_resp_line, self.filtered_resp_line]
     
     def _display_frame(self, frame):
-        """Display video frame in OpenCV window."""
-        cv2.imshow('Unified Vital Signs Monitor - Press Q to focus on GUI', frame)
-        cv2.waitKey(1)
+        """Display video frame in the GUI."""
+        if self.video_label is not None:
+            # Resize frame to fit the video label
+            h, w = frame.shape[:2]
+            # Get the current size of the video label
+            label_width = self.video_label.winfo_width()
+            label_height = self.video_label.winfo_height()
+            
+            # If the label has been rendered and has a valid size
+            if label_width > 1 and label_height > 1:
+                # Calculate the aspect ratio
+                aspect_ratio = w / h
+                
+                # Determine new dimensions to fit in label while preserving aspect ratio
+                if label_width / label_height > aspect_ratio:
+                    # Label is wider than needed
+                    new_height = label_height
+                    new_width = int(new_height * aspect_ratio)
+                else:
+                    # Label is taller than needed
+                    new_width = label_width
+                    new_height = int(new_width / aspect_ratio)
+                
+                # Resize the frame
+                resized_frame = cv2.resize(frame, (new_width, new_height))
+            else:
+                # Default size if label dimensions are not yet available
+                resized_frame = cv2.resize(frame, (640, 480))
+                
+            # Convert the image to PIL format
+            image = cv2.cvtColor(resized_frame, cv2.COLOR_BGR2RGB)
+            image = Image.fromarray(image)
+            image = ImageTk.PhotoImage(image=image)
+            
+            # Update the label
+            self.video_label.configure(image=image)
+            self.video_label.image = image  # Keep a reference to prevent garbage collection
     
     def on_closing(self):
         """Handle application closing."""
