@@ -2,7 +2,7 @@
 
 ## Dosen Pengampu: **Martin Clinton Tosima Manullang, S.T., M.T., Ph.D**
 
-# **Real Time rPPG & Respiration Signal**
+# **Program Real Time rPPG & Respiration Signal**
 
 ## **Anggota Kelompok**
 
@@ -105,6 +105,7 @@ Berikut adalah daftar library Python yang digunakan dalam proyek ini, beserta fu
 ---
 ### **Minggu 2 (19 Mei 2025 - 25 Mei 2025)**
 - Membuat file kode rPPG dan Respiration Signal
+- Trial and error pemilihan filter yang digunakan
 ---
 ### **Minggu 3 (26 Mei 2025 - 31 Mei 2025)**
 - Membuat laporan menggunakan overleaf
@@ -120,34 +121,47 @@ Dengan asumsi Anda sudah menginstal Python (disarankan versi 3.10), ikuti langka
 ### 1. Clone Repository
 
 ```yaml
-git clone https://github.com/username/nama-repo.git
+git clone https://github.com/122140155-rustian-afencius/tugas-besar-dsp.git
 ```
 
-### 2.Membuat Virtual Environment (venv)
+### 2. Install UV
 
 ```yaml
-python -m venv venv
+pip install uv
 ```
 
-Aktifkan environman (pilih sesuai sistem operasi Anda):
+### 3. Membuat Virtual Environment (venv)
+
+```yaml
+uv venv --python=python3.10
+```
+
+Aktifkan environment (pilih sesuai sistem operasi Anda):
 - Windows :
 
 ```yaml
-venv\Scripts\activate
+.venv/Scripts/activate
 ```
+
+- MacOS :
+
+```yaml
+source .venv/bin/activate
+```
+
 - Linux :
 
 ```yaml
 source venv/bin/activate
 ```
-### 3. Install requirements.txt
+### 4. Install requirements.txt
 
 ```yaml
-pip install -r requirements.txt
+uv pip install -r requirements.txt
 ```
 
-### 4. Jalankan program.
+### 5. Jalankan program
 
 ```yaml
-python main.py
+uv run main.py
 ```
