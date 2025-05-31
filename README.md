@@ -15,14 +15,47 @@
 
 ## **Deskripsi Proyek**
 
-Final project pada mata kuliah Pengolahan Sinyal Digital (IF3024) bertujuan untuk membangun sistem deteksi sinyal rPPG dan sinyal respirasi secara real-time menggunakan webcam. Sinyal rPPG diekstraksi dari perubahan warna pada area dahi menggunakan metode Plane Orthogonal-to-Skin (POS) untuk mengestimasi detak jantung. Sinyal respirasi diperoleh dari pergerakan vertikal bahu menggunakan MediaPipe Pose, lalu disaring dengan Butterworth band-pass filter orde 4 (0.1–0.5 Hz) dan dianalisis menggunakan FFT untuk menghitung laju napas.
+Proyek ini mengembangkan **sistem monitoring vital sign non-invasive** yang revolusioner dengan memanfaatkan teknologi computer vision dan digital signal processing untuk mendeteksi detak jantung dan laju pernapasan secara real-time hanya menggunakan webcam standar. Sistem ini menggabungkan teknik **Remote Photoplethysmography (rPPG)** dan **pose estimation** untuk memberikan solusi monitoring kesehatan yang mudah diakses tanpa memerlukan sensor fisik yang menyentuh tubuh.
+
+### **Teknologi yang Digunakan**
+
+**Deteksi Detak Jantung (rPPG):**
+- Menggunakan metode **Plane Orthogonal-to-Skin (POS)** untuk mengekstrak sinyal rPPG dari perubahan intensitas warna pada area dahi
+- Menerapkan **Butterworth band-pass filter** (0.7-3.5 Hz) untuk mengisolasi frekuensi detak jantung
+- Implementasi **wavelet denoising** dan **Savitzky-Golay smoothing** untuk meningkatkan kualitas sinyal
+- Analisis frekuensi menggunakan **Fast Fourier Transform (FFT)** untuk menghitung beats per minute (BPM)
+
+**Deteksi Laju Pernapasan:**
+- Memanfaatkan **MediaPipe Pose** untuk mendeteksi landmark tubuh dengan akurasi tinggi
+- Menganalisis pergerakan vertikal bahu yang mencerminkan ekspansi dan kontraksi dada saat bernapas
+- Penerapan **Butterworth band-pass filter** (0.1-0.5 Hz) untuk mengisolasi frekuensi pernapasan normal
+- Kalkulasi respiration rate melalui analisis spektral domain frekuensi
+
+### **Fitur Unggulan**
+
+- **Real-time Processing**: Monitoring simultan detak jantung dan pernapasan dengan update grafik langsung
+- **Modular Architecture**: Desain kode yang terstruktur dengan komponen terpisah untuk pose detection, signal processing, analysis, dan visualization
+- **Adaptive Quality Control**: Sistem penilaian kualitas sinyal otomatis dengan confidence scoring
+- **Interactive GUI**: Antarmuka pengguna yang intuitif dengan kontrol filter yang dapat disesuaikan
+- **Signal Visualization**: Tampilan multi-panel untuk raw signal, filtered signal, dan spektral analysis
+- **Non-invasive Monitoring**: Tidak memerlukan kontak fisik atau perangkat khusus selain webcam
+
+### **Tujuan & Manfaat**
+
+Proyek ini bertujuan untuk **mendemokratisasi akses monitoring kesehatan** dengan menyediakan teknologi yang:
+- Dapat digunakan di rumah tanpa peralatan medis mahal
+- Mendukung telemedicine dan konsultasi jarak jauh
+- Memberikan monitoring kontinyu untuk pasien dengan kondisi kronis
+- Menjadi proof-of-concept untuk aplikasi healthcare berbasis AI
+
+Sistem ini membuktikan potensi besar **teknologi computer vision dalam bidang kesehatan digital**, membuka jalan untuk pengembangan aplikasi monitoring vital sign yang lebih canggih dan accessible untuk masyarakat luas.
 
 ---
 
-## **Teknologi yang Digunakan**
+## **Alat yang Digunakan**
 |**Logo**  | **Nama**   | **Fungsi**   |
 | -------- |------------|--------------|
-|<img src="https://upload.wikimedia.org/wikipedia/commons/9/9a/Visual_Studio_Code_1.35_icon.svg" alt="VS Code Logo" width="70">|   VSCode   |editor kode utama untuk menulis, mengedit, dan menjalankan skrip Python dengan fitur seperti debugging, ekstensi, dan integrasi Git.|
+|<img src="https://upload.wikimedia.org/wikipedia/commons/9/9a/Visual_Studio_Code_1.35_icon.svg" alt="VS Code Logo" width="70">|   VSCode   |Editor kode utama untuk menulis, mengedit, dan menjalankan skrip Python dengan fitur seperti debugging, ekstensi, dan integrasi Git.|
 |<img src="https://upload.wikimedia.org/wikipedia/commons/c/c3/Python-logo-notext.svg" alt="Python Logo" width="70">|   Python   |Sebagai bahasa pemrograman utama untuk membangun dan menjalankan logika pemrosesan sinyal, analisis data, serta antarmuka sistem.|
 ---
 ## **Library yang Digunakan**
