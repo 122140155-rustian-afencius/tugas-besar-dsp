@@ -1,6 +1,6 @@
 # Final Project Mata Kuliah Digital Processing Signal (IF3024)
 
-## Dosen Pengampu: **Martin Clinton Tosima Manullang, S.T., M.T.**
+## Dosen Pengampu: **Martin Clinton Tosima Manullang, S.T., M.T., Ph.D**
 
 # **Real Time rPPG & Respiration Signal**
 
