@@ -116,4 +116,5 @@ python main.py
 - Membuat laporan menggunakan overleaf
 - Melakukan Fiksasi Kode rPPG dan Respiration Signal
 - Menggabungkan Kode rPPG dan Respiration Signal ke main.py
+- Melakukan refactoring code
 - Merapikan folder DSP
