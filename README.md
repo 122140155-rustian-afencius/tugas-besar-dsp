@@ -64,6 +64,22 @@ Berikut adalah daftar library Python yang digunakan dalam proyek ini, beserta fu
 | 29  | `typing-extensions`                 | Mendukung anotasi tipe baru pada Python versi lama.                   |
 
 ---
+## **Logbook Mingguan**
+
+### **Minggu 1 (12 Mei 2025 - 18 Mei 2025)**
+- Inisialisasi Project, membuat repositori untuk manajemen final
+- Melakukan pembagian tugas antara Rustian Afencius Marbun(122140153) dan Shintya Ayu Wardani(122140138)
+---
+### **Minggu 2 (19 Mei 2025 - 25 Mei 2025)**
+- Membuat file kode rPPG dan Respiration Signal
+---
+### **Minggu 3 (26 Mei 2025 - 31 Mei 2025)**
+- Membuat laporan menggunakan overleaf
+- Melakukan Fiksasi Kode rPPG dan Respiration Signal
+- Menggabungkan Kode rPPG dan Respiration Signal ke main.py
+- Melakukan refactoring code
+- Merapikan folder DSP
+---
 ## Cara Menjalankan Program
 
 Dengan asumsi Anda sudah menginstal Python (disarankan versi 3.10), ikuti langkah-langkah berikut untuk menjalankan proyek ini:
@@ -102,19 +118,3 @@ pip install -r requirements.txt
 ```yaml
 python main.py
 ```
-
-## **Logbook Mingguan**
----
-### **Minggu 1 (12 Mei 2025 - 18 Mei 2025)**
-- Inisialisasi Project, membuat repositori untuk manajemen final
-- Melakukan pembagian tugas antara Rustian Afencius Marbun(122140153) dan Shintya Ayu Wardani(122140138)
----
-### **Minggu 2 (19 Mei 2025 - 25 Mei 2025)**
-- Membuat file kode rPPG dan Respiration Signal
----
-### **Minggu 3 (26 Mei 2025 - 31 Mei 2025)**
-- Membuat laporan menggunakan overleaf
-- Melakukan Fiksasi Kode rPPG dan Respiration Signal
-- Menggabungkan Kode rPPG dan Respiration Signal ke main.py
-- Melakukan refactoring code
-- Merapikan folder DSP
